@@ -5,7 +5,7 @@ Client-side validated notes on unmodified Dogecoin.
 L1 stays a payment chain. YARD is optional software. If you delete
 it, your DOGE is still DOGE.
 
-See YARD.md for the spec.
+See YARD.md for the spec. Review belongs in GitHub issues, not DMs.
 
 ## Phase 0
 
@@ -21,6 +21,24 @@ No new Dogecoin opcode. No wrapped DOGE. No YARD token. No EVM.
 
     cargo test --workspace
     cargo run -p yard-cli -- --help
+
+Install from git (crates.io `yard` is an unrelated shunting-yard parser):
+
+    cargo install --git https://github.com/jonheaven/yard --locked yard-cli
+
+## Names
+
+GitHub stays `jonheaven/yard`. The English word "yard" is not a mark.
+
+crates.io `yard` is taken. The names to reserve before a public thread:
+
+- crates: `yard-doge`, `yard-core`, `yard-cli`, `yard-index`
+- domains: `yard-doge.org` and `yard-doge.dev` (RDAP 404 as of 2026-09-01 — unregistered)
+- trademark: the distinctive form (YARD-DOGE / yard-doge), not "yard" alone
+
+This README will point at `yard-doge.org` once that domain is owned.
+Do not announce a URL you do not control. `cargo publish` still needs a
+crates.io token on this machine.
 
 ## Backup
 
@@ -61,6 +79,7 @@ There is no YARD token and no contributor coin. Hosted products, the
 name, and domains can be a business later. The rules cannot.
 
 Private keys, RPC credentials, and `.yard` files are gitignored.
+See SECURITY.md. There is no bounty token.
 
 ## Phase 1 (not built)
 
