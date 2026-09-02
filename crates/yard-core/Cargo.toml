@@ -1,0 +1,14 @@
+[package]
+name = "yard-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "YARD protocol types, encoding, hashing, and client-side validation"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+hex = { workspace = true }
+sha2 = { workspace = true }
+secp256k1 = { workspace = true }
+thiserror = { workspace = true }

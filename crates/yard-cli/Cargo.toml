@@ -1,0 +1,21 @@
+[package]
+name = "yard-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "YARD command-line wallet and verifier"
+default-run = "yard"
+
+[[bin]]
+name = "yard"
+path = "src/main.rs"
+
+[dependencies]
+yard-core = { path = "../yard-core" }
+yard-doge = { path = "../yard-doge" }
+yard-index = { path = "../yard-index" }
+clap = { workspace = true }
+anyhow = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
+secp256k1 = { workspace = true }

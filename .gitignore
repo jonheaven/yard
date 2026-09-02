@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+.idea/
+.vscode/
+.DS_Store
+
+# Local consignments and keys — never commit user funds material
+*.yard
+*.wif
+testdata/*.yard
+.env

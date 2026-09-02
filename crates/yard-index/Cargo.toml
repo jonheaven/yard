@@ -1,0 +1,14 @@
+[package]
+name = "yard-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Convenience indexer for YARD OP_RETURN commitments (not a source of truth)"
+
+[dependencies]
+yard-core = { path = "../yard-core" }
+yard-doge = { path = "../yard-doge" }
+rusqlite = { workspace = true }
+hex = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
