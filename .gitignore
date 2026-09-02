@@ -8,4 +8,5 @@
 *.yard
 *.wif
 testdata/*.yard
+.yard/
 .env

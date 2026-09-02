@@ -11,7 +11,9 @@ impl Network {
     pub fn p2pkh_version(self) -> u8 {
         match self {
             Network::Mainnet => 0x1e,
-            Network::Testnet | Network::Regtest => 0x71,
+            Network::Testnet => 0x71,
+            // Dogecoin Core 1.14 CRegTestParams uses Bitcoin-like 0x6f, not testnet 0x71.
+            Network::Regtest => 0x6f,
         }
     }
 
@@ -25,7 +27,8 @@ impl Network {
     pub fn wif_version(self) -> u8 {
         match self {
             Network::Mainnet => 0x9e,
-            Network::Testnet | Network::Regtest => 0xf1,
+            Network::Testnet => 0xf1,
+            Network::Regtest => 0xef,
         }
     }
 

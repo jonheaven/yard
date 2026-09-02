@@ -11,10 +11,24 @@ pub fn hash160(data: &[u8]) -> [u8; 20] {
 }
 
 pub fn p2pkh_address(network: Network, pubkey33: &[u8; 33]) -> String {
+    p2pkh_address_from_pkh(network, &hash160(pubkey33))
+}
+
+pub fn p2pkh_address_from_pkh(network: Network, pkh: &[u8; 20]) -> String {
     let mut payload = Vec::with_capacity(21);
     payload.push(network.p2pkh_version());
-    payload.extend_from_slice(&hash160(pubkey33));
+    payload.extend_from_slice(pkh);
     check_encode(&payload)
+}
+
+pub fn pkh_from_p2pkh_address(addr: &str) -> Result<[u8; 20], Error> {
+    let (_ver, payload) = decode_address(addr)?;
+    if payload.len() != 20 {
+        return Err(Error::Address("not a P2PKH payload".into()));
+    }
+    let mut a = [0u8; 20];
+    a.copy_from_slice(&payload);
+    Ok(a)
 }
 
 pub fn decode_address(addr: &str) -> Result<(u8, Vec<u8>), Error> {
@@ -43,7 +57,8 @@ pub fn decode_wif(wif: &str) -> Result<(Network, SecretKey, bool), Error> {
     let ver = payload[0];
     let network = match ver {
         0x9e => Network::Mainnet,
-        0xf1 => Network::Testnet, // also used on regtest
+        0xf1 => Network::Testnet,
+        0xef => Network::Regtest,
         _ => return Err(Error::Wif(format!("unknown WIF version 0x{ver:02x}"))),
     };
     let compressed = payload.len() == 34;
@@ -144,8 +159,12 @@ mod tests {
         assert_eq!(payload.len(), 20);
         let wif = encode_wif(Network::Regtest, &sk, true);
         let (net, sk2, compressed) = decode_wif(&wif).unwrap();
-        assert_eq!(net, Network::Testnet); // regtest shares testnet WIF version
+        assert_eq!(net, Network::Regtest);
         assert!(compressed);
         assert_eq!(sk.secret_bytes(), sk2.secret_bytes());
+        let rt_addr = p2pkh_address(Network::Regtest, &pk);
+        // Core 1.14 regtest P2PKH version 0x6f (m/n), not testnet 0x71.
+        let (ver, _) = decode_address(&rt_addr).unwrap();
+        assert_eq!(ver, 0x6f);
     }
 }

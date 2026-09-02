@@ -1780,6 +1780,7 @@ dependencies = [
 name = "yard-core"
 version = "0.1.0"
 dependencies = [
+ "bitcoin_hashes",
  "hex",
  "secp256k1",
  "serde",

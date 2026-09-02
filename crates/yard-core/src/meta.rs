@@ -1,9 +1,12 @@
+use crate::launch::LaunchSpec;
 use crate::{Amount, Error};
 use serde::{Deserialize, Serialize};
 
 const TICKER_RE: &str = r"^[A-Z0-9]{1,8}$";
 
 /// Genesis metadata. JSON, utf-8, max 512 bytes on the wire.
+///
+/// Extra field `launch` is omitted when None so Phase 0 vectors stay bit-stable.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GenesisMeta {
     pub p: String,
@@ -14,6 +17,8 @@ pub struct GenesisMeta {
     pub dec: u32,
     pub max: String,
     pub lim: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<LaunchSpec>,
 }
 
 impl GenesisMeta {
@@ -27,6 +32,7 @@ impl GenesisMeta {
             dec,
             max: max.to_string(),
             lim: lim.to_string(),
+            launch: None,
         };
         m.validate()?;
         Ok(m)
@@ -75,6 +81,12 @@ impl GenesisMeta {
         self.lim
             .parse::<u128>()
             .map_err(|_| Error::Meta("lim is not a u128 decimal string".into()))?;
+        if let Some(l) = &self.launch {
+            if self.ty != "ft" {
+                return Err(Error::Meta("launch requires ty=ft".into()));
+            }
+            l.validate()?;
+        }
         Ok(())
     }
 }

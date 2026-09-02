@@ -2,7 +2,7 @@
 ## Client-side validated utility for Dogecoin
 ### Agent briefing, protocol spec, threat model, and build plan
 ### Version: 0.1.0-draft
-### Date: 2026-09-01
+### Date: 2026-09-02
 ### Status: implementable draft — no L1 fork, no token, no wrap-by-default
 
 This is the only document an agent needs to start the repo.
@@ -100,9 +100,13 @@ Network
   Coin: 100,000,000 koinu = 1 DOGE
 
 Addresses
-  P2PKH version byte: 0x1e  (addresses start with D)
-  P2SH version byte:  0x16  (addresses start with 9 or A)
-  WIF version:        0x9e
+  Mainnet P2PKH: 0x1e  (addresses start with D)
+  Mainnet P2SH:  0x16  (addresses start with 9 or A)
+  Mainnet WIF:   0x9e
+  Testnet P2PKH: 0x71  / WIF 0xf1
+  Regtest P2PKH: 0x6f  / WIF 0xef   (Dogecoin Core 1.14 CRegTestParams;
+                 Bitcoin-like, not the same as testnet. dumpprivkey on
+                 -regtest returns 0xef. Do not treat regtest as testnet.)
   No bech32 on mainnet. Do not generate doge1...
 
 Script / consensus you MAY use
@@ -316,7 +320,18 @@ Output-seal txid (construction):
   max: decimal string of u128 base units
   lim: per-op mint cap, 0 means no open mint after genesis
   For v1 genesis, all `max` units MUST be assigned in genesis outputs.
-  No post-genesis mint in Phase 0. Launch curves are Phase 1.
+  No post-genesis mint. Launch curves (Phase 1) put unsold units on
+  genesis output[0] (the pool) and add an optional `launch` object:
+
+  {
+    "curve": "lin",
+    "tr": "<40-char HASH160 hex>",
+    "base": "<koinu per unit at sold=0>",
+    "slope": "<koinu per unit per unit sold>"
+  }
+
+  or `"curve":"cpmm"` with `"x":"<initial doge reserve koinu>"`.
+  Buys pay L1 DOGE to `tr`. Tickers stay non-unique.
 
 Ticker uniqueness is NOT consensus. Two contracts may use TEST.
 Wallets display ContractId prefix. Exchanges list by ContractId.
@@ -361,8 +376,22 @@ T5  Signatures verify against the pubkeys assigned by the previous
     operation to those seals.
 T6  OP_RETURN root commits to this operation (or merkle inclusion).
 T7  No seal is closed twice. (Follow L1. If L1 reorgs, rewind YARD.)
-T8  op_type allowed by contract. Phase 0: only genesis and transfer
-    and burn.
+T8  op_type allowed by contract. Always: genesis, transfer, burn.
+    LaunchBuy / LaunchSell only if genesis meta contains a launch spec.
+    The pool pubkey (genesis output[0]) may not be spent by transfer or burn.
+
+L1  Launch genesis meta includes curve (`lin` or `cpmm`) and treasury HASH160.
+L2  Genesis output[0] is the pool inventory (remaining unsold units).
+L3  launch_buy spends exactly the current pool seal.
+L4  Purchased units go to exactly one buyer output; remainder stays on the pool pubkey.
+L5  Committing L1 tx pays >= curve cost in DOGE to the treasury P2PKH,
+    excluding seal outputs. Overpay is allowed.
+L6  launch_sell spends the pool seal and one seller note; pool inventory increases.
+L7  Committing L1 tx pays >= curve refund in DOGE to the seller P2PKH,
+    excluding seal outputs. Anyone may fund the refund.
+L8  There is no covenant. A published pool key can be grief-spent as plain
+    DOGE (the dust seal dies). Already-sold notes remain. Same class of
+    risk as losing a consignment.
 
 Reorg
   Watch the local Dogecoin node. If a committing tx leaves the best
@@ -379,28 +408,40 @@ Ignore unknown
 8. PHASES
 -------------------------------------------------------------------------------
 
-Phase 0  — this repo, this month
+Phase 0  — notes
   Library + CLI + indexer that talks to dogecoin-core
   genesis + transfer + burn on testnet / regtest
-  consignment export/import
+  consignment export / backup / show (TICK-a1b2c3d4)
   unit tests and test vectors
-  NO launchpad, NO channels, NO HTTP app, NO token
+  NO HTTP app, NO token, NO EVM
 
-Phase 1  — after Phase 0 is green
-  Launch notes: fixed-supply sale paid in L1 DOGE
-  Simple linear or constant-product curve encoded in genesis meta
+Phase 1  — launch notes (this repo, after Phase 0 types)
+  Coordinated sale plus client-validated inventory, paid in L1 DOGE
+  Not an AMM. Not miner-enforced. Miners see a payment and an OP_RETURN.
+  Linear or cpmm price in genesis meta, checked by YARD software
+  launch-buy / launch-sell CLI
   This replaces Anoncoin for Doge-native memes
+  Still no HTTP launchpad, no wrap, no YARD token
+  Limitations (say them every time):
+    raise goes to a treasury P2PKH
+    a published pool key can be grief-spent as plain DOGE (dust seal dies)
+    already-sold notes survive
+    sells need someone to fund the L1 refund; Core will not force it
 
 Phase 2  — only if CSV activates on Dogecoin, or with weaker nLockTime
   Payment channels for DOGE itself
   Until CSV is live, do not advertise Lightning-on-Doge
 
-Phase 3  — optional sovereign execution
+Phase 3  — optional sovereign execution — PARKED
   Batch roots in OP_RETURN
   Execution verified by YARD software, never by miners
   Still no L1 opcode
+  Do not implement until a stranger can verify a transfer from
+  dogecoind + yard-cli + a .yard file with no API.
 
-Agent: implement Phase 0 only unless the human says otherwise.
+Agent: implement Phase 0 and Phase 1 launch notes. Do not implement
+Phase 2 or Phase 3. Do not add an EVM, a sequencer, a YARD token,
+or Doginal execution batches.
 
 -------------------------------------------------------------------------------
 9. REPOSITORY LAYOUT
@@ -433,7 +474,8 @@ yard-index
   SQLite scan for magic YARD. Convenience only. Never a source of truth.
 
 yard-cli
-  new-key, genesis, transfer, verify, scan
+  new-key, genesis, transfer, burn, show, export, backup, verify, scan,
+  launch-buy, launch-sell
 
 -------------------------------------------------------------------------------
 11. CRYPTOGRAPHY DETAILS  (do not get creative)
@@ -480,6 +522,15 @@ Accepted risks in Phase 0
   has the consignment and key.
   Anyone can issue a contract named DOGE or BTC. Wallets must show
   ContractId.
+
+Accepted risks in Phase 1 (launch)
+  Launch is a coordinated sale, not an AMM, not miner-enforced.
+  The treasury P2PKH receives the raise; YARD cannot stop that
+  key from spending the DOGE later.
+  A published pool key can be grief-spent as a plain DOGE
+  transaction. The 0.05 dust seal dies. Already-sold notes remain.
+  launch_sell refunds are L1 DOGE someone must fund. There is no
+  covenant. Do not call this a trustless pool.
 
 Rejected designs
   "Just trust our API for balances"

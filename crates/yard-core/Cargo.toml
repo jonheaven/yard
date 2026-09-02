@@ -10,5 +10,6 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 hex = { workspace = true }
 sha2 = { workspace = true }
+bitcoin_hashes = { workspace = true }
 secp256k1 = { workspace = true }
 thiserror = { workspace = true }

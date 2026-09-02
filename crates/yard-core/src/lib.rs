@@ -8,6 +8,7 @@ mod consignment;
 mod error;
 mod hash;
 mod l1;
+mod launch;
 mod meta;
 mod operation;
 mod outpoint;
@@ -18,10 +19,11 @@ pub use amount::Amount;
 pub use commitment::{merkle_root, Commitment, CommitmentKind, COMMITMENT_LEN};
 pub use consignment::{Consignment, MerkleProof, CONS_MAGIC};
 pub use error::Error;
-pub use hash::{compact_size_len, sha256d, tagged_sha256d, TAG_OP, TAG_SIGHASH};
+pub use hash::{compact_size_len, hash160, sha256d, tagged_sha256d, TAG_OP, TAG_SIGHASH};
 pub use l1::{
     is_p2pkh, opreturn_script, p2pkh_script, parse_opreturn_payload, Transaction, TxIn, TxOut,
 };
+pub use launch::{cpmm_buy_cost, cpmm_sell_refund, cpmm_x, linear_buy_cost, LaunchSpec};
 pub use meta::{validate_ticker, GenesisMeta};
 pub use operation::{OpInput, OpOutput, OpType, Operation};
 pub use outpoint::{
@@ -437,5 +439,428 @@ mod tests {
         let tx = l1_for_genesis(&op, 1, SOFT_DUST_KOINU);
         let err = validate_operation(&op, &[], &tx, std::slice::from_ref(&op)).unwrap_err();
         assert!(matches!(err, Error::G3), "got {err}");
+    }
+
+    #[test]
+    fn t_display_tick_never_bare() {
+        let op = signed_genesis(1, 21_000_000_000_000_000);
+        let cid = op.genesis_contract_id().unwrap();
+        let shown = cid.display_with_tick("TEST");
+        assert!(shown.starts_with("TEST-"));
+        assert_eq!(shown.len(), "TEST-".len() + 8);
+        assert_ne!(shown, "TEST");
+    }
+
+    #[test]
+    fn t_burn_reduces_supply() {
+        let genesis = signed_genesis(1, 1_000);
+        let gtx = l1_for_genesis(&genesis, 1, SOFT_DUST_KOINU);
+        validate_operation(&genesis, &[], &gtx, std::slice::from_ref(&genesis)).unwrap();
+        let accepted = AcceptedOp {
+            op: genesis.clone(),
+            l1_txid: gtx.txid(),
+            contract_id: genesis.genesis_contract_id().unwrap(),
+        };
+        let pk = compressed_pubkey(&test_secret());
+        let spent = Outpoint {
+            txid: gtx.txid(),
+            vout: 1,
+        };
+        let mut burn = Operation {
+            op_version: 1,
+            contract_id: accepted.contract_id,
+            op_type: OpType::Burn,
+            inputs: vec![OpInput {
+                prev_op_hash: genesis.op_hash().unwrap(),
+                prev_seal: spent,
+                amount: Amount(1_000),
+            }],
+            outputs: vec![OpOutput {
+                seal: Outpoint::this_tx(1),
+                amount: Amount(700),
+                pubkey: pk,
+            }],
+            meta: vec![],
+            sigs: vec![[0u8; 64]],
+        };
+        burn.sign(0, &test_secret()).unwrap();
+        let cm = Commitment::single(&burn).unwrap();
+        let tx = Transaction {
+            version: 1,
+            vin: vec![TxIn {
+                prevout: spent,
+                script_sig: vec![0x00],
+                sequence: 0xffffffff,
+            }],
+            vout: vec![
+                TxOut {
+                    value: 0,
+                    script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&dummy_pkh()),
+                },
+            ],
+            lock_time: 0,
+        };
+        validate_operation(&burn, &[accepted.clone()], &tx, std::slice::from_ref(&burn)).unwrap();
+        let cons = Consignment::new(vec![genesis, burn], vec![gtx, tx]);
+        let acc = validate_consignment(&cons).unwrap();
+        let notes = open_notes(&acc);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0].1, Amount(700));
+    }
+
+    fn secret_n(n: u8) -> secp256k1::SecretKey {
+        let mut b = [0u8; 32];
+        b[31] = n;
+        secret_from_bytes(&b).unwrap()
+    }
+
+    fn genesis_launch(pool_amt: u128, base: u128) -> (Operation, Transaction, [u8; 20]) {
+        let pk = compressed_pubkey(&test_secret());
+        let treasury = [0xab; 20];
+        let mut meta = GenesisMeta::new_ft("MEME", "Meme", 8, pool_amt, 0).unwrap();
+        meta.launch = Some(LaunchSpec::linear(&treasury, base, 0).unwrap());
+        let mut op = Operation {
+            op_version: 1,
+            contract_id: ContractId::zeros(),
+            op_type: OpType::Genesis,
+            inputs: vec![],
+            outputs: vec![OpOutput {
+                seal: Outpoint::this_tx(1),
+                amount: Amount(pool_amt),
+                pubkey: pk,
+            }],
+            meta: meta.to_bytes().unwrap(),
+            sigs: vec![[0u8; 64]],
+        };
+        op.sign(0, &test_secret()).unwrap();
+        let tx = l1_for_genesis(&op, 1, SOFT_DUST_KOINU);
+        (op, tx, treasury)
+    }
+
+    #[test]
+    fn t_launch_buy_requires_l1_doge() {
+        let (genesis, gtx, treasury) = genesis_launch(1_000, 1_000);
+        validate_operation(&genesis, &[], &gtx, std::slice::from_ref(&genesis)).unwrap();
+        let accepted = AcceptedOp {
+            op: genesis.clone(),
+            l1_txid: gtx.txid(),
+            contract_id: genesis.genesis_contract_id().unwrap(),
+        };
+        let pool_pk = compressed_pubkey(&test_secret());
+        let buyer_pk = compressed_pubkey(&secret_n(2));
+        let spent = Outpoint {
+            txid: gtx.txid(),
+            vout: 1,
+        };
+        let mut buy = Operation {
+            op_version: 1,
+            contract_id: accepted.contract_id,
+            op_type: OpType::LaunchBuy,
+            inputs: vec![OpInput {
+                prev_op_hash: genesis.op_hash().unwrap(),
+                prev_seal: spent,
+                amount: Amount(1_000),
+            }],
+            outputs: vec![
+                OpOutput {
+                    seal: Outpoint::this_tx(1),
+                    amount: Amount(10),
+                    pubkey: buyer_pk,
+                },
+                OpOutput {
+                    seal: Outpoint::this_tx(2),
+                    amount: Amount(990),
+                    pubkey: pool_pk,
+                },
+            ],
+            meta: vec![],
+            sigs: vec![[0u8; 64]],
+        };
+        buy.sign(0, &test_secret()).unwrap();
+        let cm = Commitment::single(&buy).unwrap();
+        let mut tx = Transaction {
+            version: 1,
+            vin: vec![TxIn {
+                prevout: spent,
+                script_sig: vec![0x00],
+                sequence: 0xffffffff,
+            }],
+            vout: vec![
+                TxOut {
+                    value: 0,
+                    script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&hash160(&buyer_pk)),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&hash160(&pool_pk)),
+                },
+            ],
+            lock_time: 0,
+        };
+        let err = validate_operation(&buy, &[accepted.clone()], &tx, std::slice::from_ref(&buy))
+            .unwrap_err();
+        assert!(matches!(err, Error::LaunchPay), "got {err}");
+        tx.vout.push(TxOut {
+            value: 10_000, // 10 units * 1000 koinu
+            script_pubkey: p2pkh_script(&treasury),
+        });
+        validate_operation(&buy, &[accepted], &tx, std::slice::from_ref(&buy)).unwrap();
+    }
+
+    #[test]
+    fn t_launch_pool_cannot_transfer() {
+        let (genesis, gtx, _) = genesis_launch(1_000, 1_000);
+        validate_operation(&genesis, &[], &gtx, std::slice::from_ref(&genesis)).unwrap();
+        let accepted = AcceptedOp {
+            op: genesis.clone(),
+            l1_txid: gtx.txid(),
+            contract_id: genesis.genesis_contract_id().unwrap(),
+        };
+        let pk = compressed_pubkey(&test_secret());
+        let spent = Outpoint {
+            txid: gtx.txid(),
+            vout: 1,
+        };
+        let mut xfer = Operation {
+            op_version: 1,
+            contract_id: accepted.contract_id,
+            op_type: OpType::Transfer,
+            inputs: vec![OpInput {
+                prev_op_hash: genesis.op_hash().unwrap(),
+                prev_seal: spent,
+                amount: Amount(1_000),
+            }],
+            outputs: vec![OpOutput {
+                seal: Outpoint::this_tx(1),
+                amount: Amount(1_000),
+                pubkey: pk,
+            }],
+            meta: vec![],
+            sigs: vec![[0u8; 64]],
+        };
+        xfer.sign(0, &test_secret()).unwrap();
+        let cm = Commitment::single(&xfer).unwrap();
+        let tx = Transaction {
+            version: 1,
+            vin: vec![TxIn {
+                prevout: spent,
+                script_sig: vec![0x00],
+                sequence: 0xffffffff,
+            }],
+            vout: vec![
+                TxOut {
+                    value: 0,
+                    script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&dummy_pkh()),
+                },
+            ],
+            lock_time: 0,
+        };
+        let err =
+            validate_operation(&xfer, &[accepted], &tx, std::slice::from_ref(&xfer)).unwrap_err();
+        assert!(matches!(err, Error::T8), "got {err}");
+    }
+
+    #[test]
+    fn t_burn_all_allows_zero_outputs() {
+        let genesis = signed_genesis(1, 1_000);
+        let gtx = l1_for_genesis(&genesis, 1, SOFT_DUST_KOINU);
+        let accepted = AcceptedOp {
+            op: genesis.clone(),
+            l1_txid: gtx.txid(),
+            contract_id: genesis.genesis_contract_id().unwrap(),
+        };
+        let spent = Outpoint {
+            txid: gtx.txid(),
+            vout: 1,
+        };
+        let mut burn = Operation {
+            op_version: 1,
+            contract_id: accepted.contract_id,
+            op_type: OpType::Burn,
+            inputs: vec![OpInput {
+                prev_op_hash: genesis.op_hash().unwrap(),
+                prev_seal: spent,
+                amount: Amount(1_000),
+            }],
+            outputs: vec![],
+            meta: vec![],
+            sigs: vec![[0u8; 64]],
+        };
+        burn.sign(0, &test_secret()).unwrap();
+        let cm = Commitment::single(&burn).unwrap();
+        let tx = Transaction {
+            version: 1,
+            vin: vec![TxIn {
+                prevout: spent,
+                script_sig: vec![0x00],
+                sequence: 0xffffffff,
+            }],
+            vout: vec![TxOut {
+                value: 0,
+                script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+            }],
+            lock_time: 0,
+        };
+        validate_operation(&burn, &[accepted], &tx, std::slice::from_ref(&burn)).unwrap();
+    }
+
+    #[test]
+    fn t_launch_sell_refunds_l1_doge() {
+        let (genesis, gtx, treasury) = genesis_launch(1_000, 1_000);
+        let g_acc = AcceptedOp {
+            op: genesis.clone(),
+            l1_txid: gtx.txid(),
+            contract_id: genesis.genesis_contract_id().unwrap(),
+        };
+        let pool_pk = compressed_pubkey(&test_secret());
+        let buyer_sk = secret_n(2);
+        let buyer_pk = compressed_pubkey(&buyer_sk);
+        let pool_spent = Outpoint {
+            txid: gtx.txid(),
+            vout: 1,
+        };
+        let mut buy = Operation {
+            op_version: 1,
+            contract_id: g_acc.contract_id,
+            op_type: OpType::LaunchBuy,
+            inputs: vec![OpInput {
+                prev_op_hash: genesis.op_hash().unwrap(),
+                prev_seal: pool_spent,
+                amount: Amount(1_000),
+            }],
+            outputs: vec![
+                OpOutput {
+                    seal: Outpoint::this_tx(1),
+                    amount: Amount(10),
+                    pubkey: buyer_pk,
+                },
+                OpOutput {
+                    seal: Outpoint::this_tx(2),
+                    amount: Amount(990),
+                    pubkey: pool_pk,
+                },
+            ],
+            meta: vec![],
+            sigs: vec![[0u8; 64]],
+        };
+        buy.sign(0, &test_secret()).unwrap();
+        let cm = Commitment::single(&buy).unwrap();
+        let buy_tx = Transaction {
+            version: 1,
+            vin: vec![TxIn {
+                prevout: pool_spent,
+                script_sig: vec![0x00],
+                sequence: 0xffffffff,
+            }],
+            vout: vec![
+                TxOut {
+                    value: 0,
+                    script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&hash160(&buyer_pk)),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&hash160(&pool_pk)),
+                },
+                TxOut {
+                    value: 10_000,
+                    script_pubkey: p2pkh_script(&treasury),
+                },
+            ],
+            lock_time: 0,
+        };
+        validate_operation(&buy, &[g_acc.clone()], &buy_tx, std::slice::from_ref(&buy)).unwrap();
+        let buy_acc = AcceptedOp {
+            op: buy.clone(),
+            l1_txid: buy_tx.txid(),
+            contract_id: g_acc.contract_id,
+        };
+        let seller_seal = Outpoint {
+            txid: buy_tx.txid(),
+            vout: 1,
+        };
+        let pool_seal = Outpoint {
+            txid: buy_tx.txid(),
+            vout: 2,
+        };
+        let mut sell = Operation {
+            op_version: 1,
+            contract_id: g_acc.contract_id,
+            op_type: OpType::LaunchSell,
+            inputs: vec![
+                OpInput {
+                    prev_op_hash: buy.op_hash().unwrap(),
+                    prev_seal: pool_seal,
+                    amount: Amount(990),
+                },
+                OpInput {
+                    prev_op_hash: buy.op_hash().unwrap(),
+                    prev_seal: seller_seal,
+                    amount: Amount(10),
+                },
+            ],
+            outputs: vec![OpOutput {
+                seal: Outpoint::this_tx(1),
+                amount: Amount(1_000),
+                pubkey: pool_pk,
+            }],
+            meta: vec![],
+            sigs: vec![[0u8; 64], [0u8; 64]],
+        };
+        sell.sign(0, &test_secret()).unwrap();
+        sell.sign(1, &buyer_sk).unwrap();
+        let cm = Commitment::single(&sell).unwrap();
+        let sell_tx = Transaction {
+            version: 1,
+            vin: vec![
+                TxIn {
+                    prevout: pool_seal,
+                    script_sig: vec![0x00],
+                    sequence: 0xffffffff,
+                },
+                TxIn {
+                    prevout: seller_seal,
+                    script_sig: vec![0x00],
+                    sequence: 0xffffffff,
+                },
+            ],
+            vout: vec![
+                TxOut {
+                    value: 0,
+                    script_pubkey: opreturn_script(&cm.encode()).unwrap(),
+                },
+                TxOut {
+                    value: SOFT_DUST_KOINU,
+                    script_pubkey: p2pkh_script(&hash160(&pool_pk)),
+                },
+                TxOut {
+                    value: 10_000,
+                    script_pubkey: p2pkh_script(&hash160(&buyer_pk)),
+                },
+            ],
+            lock_time: 0,
+        };
+        validate_operation(
+            &sell,
+            &[g_acc, buy_acc],
+            &sell_tx,
+            std::slice::from_ref(&sell),
+        )
+        .unwrap();
     }
 }

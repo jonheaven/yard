@@ -25,9 +25,15 @@ impl OpType {
         }
     }
 
-    /// T8: Phase 0 allows genesis, transfer, burn only.
+    /// T8: genesis / transfer / burn always. Launch ops only if the contract
+    /// published a launch spec at genesis.
     pub fn allowed_phase0(self) -> bool {
         matches!(self, Self::Genesis | Self::Transfer | Self::Burn)
+    }
+
+    pub fn allowed_for(self, launch_enabled: bool) -> bool {
+        self.allowed_phase0()
+            || (launch_enabled && matches!(self, Self::LaunchBuy | Self::LaunchSell))
     }
 }
 

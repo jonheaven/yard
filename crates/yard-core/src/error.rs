@@ -52,8 +52,11 @@ pub enum Error {
     #[error("T7: seal closed twice")]
     T7,
 
-    #[error("T8: op_type not allowed in Phase 0")]
+    #[error("T8: op_type not allowed for this contract")]
     T8,
+
+    #[error("L6/L8: launch L1 DOGE payment is below the curve price")]
+    LaunchPay,
 
     #[error("high-S ECDSA signature is not allowed")]
     HighS,

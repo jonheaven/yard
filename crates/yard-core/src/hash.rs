@@ -1,3 +1,4 @@
+use bitcoin_hashes::{hash160, Hash};
 use sha2::{Digest, Sha256};
 
 /// SHA256d = SHA256(SHA256(x)), same as Dogecoin.
@@ -20,6 +21,11 @@ pub fn tagged_sha256d(tag: &[u8], msg: &[u8]) -> [u8; 32] {
 
 pub const TAG_OP: &[u8] = b"yard/op/v1";
 pub const TAG_SIGHASH: &[u8] = b"yard/sighash/v1";
+
+/// HASH160 = RIPEMD160(SHA256(x)). Same as Dogecoin P2PKH.
+pub fn hash160(data: &[u8]) -> [u8; 20] {
+    hash160::Hash::hash(data).to_byte_array()
+}
 
 /// Read helpers. All multi-byte integers little-endian.
 pub struct Reader<'a> {

@@ -1,5 +1,6 @@
 use crate::consignment::Consignment;
-use crate::l1::Transaction;
+use crate::l1::{is_p2pkh, Transaction};
+use crate::launch::LaunchSpec;
 use crate::meta::GenesisMeta;
 use crate::operation::{OpType, Operation};
 use crate::outpoint::{ContractId, Outpoint};
@@ -28,8 +29,9 @@ pub fn validate_operation(
     if op.op_version != 1 {
         return Err(Error::Decode("op_version != 1".into()));
     }
+    let info = launch_info(prev);
     // T8
-    if !op.op_type.allowed_phase0() {
+    if !op.op_type.allowed_for(info.enabled) {
         return Err(Error::T8);
     }
     if op.sigs.len() != op.expected_sig_count() {
@@ -56,10 +58,56 @@ pub fn validate_operation(
 
     match op.op_type {
         OpType::Genesis => validate_genesis(op, l1_tx, &l1_txid)?,
-        OpType::Transfer | OpType::Burn => validate_spend(op, prev, l1_tx, &l1_txid)?,
-        OpType::LaunchBuy | OpType::LaunchSell => return Err(Error::T8),
+        OpType::Transfer | OpType::Burn => validate_spend(op, prev, l1_tx, &l1_txid, info.pool_pk)?,
+        OpType::LaunchBuy => {
+            validate_spend(op, prev, l1_tx, &l1_txid, info.pool_pk)?;
+            validate_launch_buy(op, prev, l1_tx, &info)?;
+        }
+        OpType::LaunchSell => {
+            validate_spend(op, prev, l1_tx, &l1_txid, info.pool_pk)?;
+            validate_launch_sell(op, prev, l1_tx, &info)?;
+        }
     }
     Ok(())
+}
+
+struct LaunchInfo {
+    enabled: bool,
+    spec: Option<LaunchSpec>,
+    pool_pk: Option<[u8; 33]>,
+    pool0: Amount,
+}
+
+fn launch_info(prev: &[AcceptedOp]) -> LaunchInfo {
+    let none = LaunchInfo {
+        enabled: false,
+        spec: None,
+        pool_pk: None,
+        pool0: Amount::ZERO,
+    };
+    let Some(g) = prev.first() else {
+        return none;
+    };
+    if g.op.op_type != OpType::Genesis {
+        return none;
+    }
+    let Ok(meta) = GenesisMeta::from_bytes(&g.op.meta) else {
+        return none;
+    };
+    match meta.launch {
+        Some(spec) => LaunchInfo {
+            enabled: true,
+            spec: Some(spec),
+            pool_pk: g.op.outputs.first().map(|o| o.pubkey),
+            pool0: g
+                .op
+                .outputs
+                .first()
+                .map(|o| o.amount)
+                .unwrap_or(Amount::ZERO),
+        },
+        None => none,
+    }
 }
 
 /// G1–G5.
@@ -104,12 +152,13 @@ fn validate_genesis(op: &Operation, l1_tx: &Transaction, l1_txid: &[u8; 32]) -> 
     Ok(())
 }
 
-/// T1–T8 for transfer and burn.
+/// T1–T8 for transfer, burn, and launch spends.
 fn validate_spend(
     op: &Operation,
     prev: &[AcceptedOp],
     l1_tx: &Transaction,
     l1_txid: &[u8; 32],
+    pool_pk: Option<[u8; 33]>,
 ) -> Result<(), Error> {
     if op.inputs.is_empty() {
         return Err(Error::T1);
@@ -125,7 +174,7 @@ fn validate_spend(
     let in_sum = op.input_sum()?;
     let out_sum = op.output_sum()?;
     match op.op_type {
-        OpType::Transfer => {
+        OpType::Transfer | OpType::LaunchBuy | OpType::LaunchSell => {
             // T2: burned = 0
             if in_sum != out_sum {
                 return Err(Error::T2);
@@ -157,6 +206,12 @@ fn validate_spend(
         let (prev_op, prev_txid) = find_prev(prev, &inp.prev_op_hash)?;
         let assigned = find_assigned(prev_op, prev_txid, &inp.prev_seal, inp.amount)?;
         op.verify_sig(i, &assigned).map_err(|_| Error::T5)?;
+        // Pool inventory of a launch contract is not a transferable note.
+        if let Some(pk) = pool_pk {
+            if assigned == pk && !matches!(op.op_type, OpType::LaunchBuy | OpType::LaunchSell) {
+                return Err(Error::T8);
+            }
+        }
     }
 
     let mut opened = HashSet::new();
@@ -185,6 +240,162 @@ fn check_output_seal(
         return Err(Error::T4);
     }
     Ok(())
+}
+
+/// L3–L6: spend the pool, split purchased units to one buyer, pay the curve
+/// in L1 DOGE to the treasury (excluding seal outputs).
+fn validate_launch_buy(
+    op: &Operation,
+    prev: &[AcceptedOp],
+    l1_tx: &Transaction,
+    info: &LaunchInfo,
+) -> Result<(), Error> {
+    let spec = info.spec.as_ref().ok_or(Error::T8)?;
+    let pool_pk = info.pool_pk.ok_or(Error::T8)?;
+    if op.inputs.len() != 1 {
+        return Err(Error::Decode(
+            "launch_buy must spend exactly the pool seal".into(),
+        ));
+    }
+    let (prev_op, prev_txid) = find_prev(prev, &op.inputs[0].prev_op_hash)?;
+    let assigned = find_assigned(
+        prev_op,
+        prev_txid,
+        &op.inputs[0].prev_seal,
+        op.inputs[0].amount,
+    )?;
+    if assigned != pool_pk {
+        return Err(Error::Decode("launch_buy must spend the pool seal".into()));
+    }
+    let pool_in = op.inputs[0].amount;
+    let pool_out = op
+        .outputs
+        .iter()
+        .filter(|o| o.pubkey == pool_pk)
+        .try_fold(Amount::ZERO, |a, o| a.checked_add(o.amount))
+        .ok_or_else(|| Error::Decode("pool remainder overflow".into()))?;
+    if op.outputs.iter().filter(|o| o.pubkey == pool_pk).count() > 1 {
+        return Err(Error::Decode("launch_buy has multiple pool outputs".into()));
+    }
+    let bought = pool_in
+        .checked_sub(pool_out)
+        .ok_or_else(|| Error::Decode("pool remainder exceeds pool input".into()))?;
+    if bought.0 == 0 {
+        return Err(Error::Decode("launch_buy amount is 0".into()));
+    }
+    let buyers: Vec<_> = op.outputs.iter().filter(|o| o.pubkey != pool_pk).collect();
+    if buyers.len() != 1 || buyers[0].amount != bought {
+        return Err(Error::Decode(
+            "launch_buy must assign purchased units to exactly one buyer output".into(),
+        ));
+    }
+    let cost = spec.buy_cost(info.pool0.0, pool_in.0, bought.0)?;
+    let treasury = spec.treasury_pkh()?;
+    let paid = non_seal_paid_to(l1_tx, &treasury, op);
+    if (paid as u128) < cost {
+        return Err(Error::LaunchPay);
+    }
+    Ok(())
+}
+
+/// L7–L8: spend pool + seller note, return units to the pool, pay the refund
+/// in L1 DOGE to the seller (excluding seal outputs). Anyone may fund it.
+fn validate_launch_sell(
+    op: &Operation,
+    prev: &[AcceptedOp],
+    l1_tx: &Transaction,
+    info: &LaunchInfo,
+) -> Result<(), Error> {
+    let spec = info.spec.as_ref().ok_or(Error::T8)?;
+    let pool_pk = info.pool_pk.ok_or(Error::T8)?;
+    if op.inputs.len() != 2 {
+        return Err(Error::Decode(
+            "launch_sell must spend the pool seal and one seller note".into(),
+        ));
+    }
+    let mut pool_in: Option<Amount> = None;
+    let mut seller_pk: Option<[u8; 33]> = None;
+    let mut seller_in = Amount::ZERO;
+    for inp in &op.inputs {
+        let (prev_op, prev_txid) = find_prev(prev, &inp.prev_op_hash)?;
+        let assigned = find_assigned(prev_op, prev_txid, &inp.prev_seal, inp.amount)?;
+        if assigned == pool_pk {
+            if pool_in.is_some() {
+                return Err(Error::Decode("launch_sell spends pool twice".into()));
+            }
+            pool_in = Some(inp.amount);
+        } else {
+            if seller_pk.is_some() {
+                return Err(Error::Decode(
+                    "launch_sell must have exactly one seller input".into(),
+                ));
+            }
+            seller_pk = Some(assigned);
+            seller_in = inp.amount;
+        }
+    }
+    let pool_in = pool_in.ok_or_else(|| Error::Decode("launch_sell missing pool input".into()))?;
+    let seller_pk =
+        seller_pk.ok_or_else(|| Error::Decode("launch_sell missing seller input".into()))?;
+
+    let pool_out = op
+        .outputs
+        .iter()
+        .filter(|o| o.pubkey == pool_pk)
+        .try_fold(Amount::ZERO, |a, o| a.checked_add(o.amount))
+        .ok_or_else(|| Error::Decode("pool output overflow".into()))?;
+    if op.outputs.iter().filter(|o| o.pubkey == pool_pk).count() != 1 {
+        return Err(Error::Decode(
+            "launch_sell must have exactly one pool output".into(),
+        ));
+    }
+    let returned = pool_out
+        .checked_sub(pool_in)
+        .ok_or_else(|| Error::Decode("launch_sell did not return units to the pool".into()))?;
+    if returned.0 == 0 {
+        return Err(Error::Decode("launch_sell amount is 0".into()));
+    }
+    let seller_out = op
+        .outputs
+        .iter()
+        .filter(|o| o.pubkey == seller_pk)
+        .try_fold(Amount::ZERO, |a, o| a.checked_add(o.amount))
+        .ok_or_else(|| Error::Decode("seller remainder overflow".into()))?;
+    if seller_out
+        .checked_add(returned)
+        .ok_or_else(|| Error::Decode("seller remainder overflow".into()))?
+        != seller_in
+    {
+        return Err(Error::Decode(
+            "launch_sell seller in != remainder + returned".into(),
+        ));
+    }
+    let refund = spec.sell_refund(info.pool0.0, pool_in.0, returned.0)?;
+    if refund == 0 {
+        return Err(Error::LaunchPay);
+    }
+    let seller_pkh = crate::hash160(&seller_pk);
+    let paid = non_seal_paid_to(l1_tx, &seller_pkh, op);
+    if (paid as u128) < refund {
+        return Err(Error::LaunchPay);
+    }
+    Ok(())
+}
+
+fn non_seal_paid_to(l1_tx: &Transaction, pkh: &[u8; 20], op: &Operation) -> u64 {
+    let seal_vouts: HashSet<u32> = op.outputs.iter().map(|o| o.seal.vout).collect();
+    let mut sum = 0u64;
+    for (i, o) in l1_tx.vout.iter().enumerate() {
+        if seal_vouts.contains(&(i as u32)) {
+            continue;
+        }
+        if let Some(h) = is_p2pkh(&o.script_pubkey) {
+            if h == *pkh {
+                sum = sum.saturating_add(o.value);
+            }
+        }
+    }
+    sum
 }
 
 fn find_prev<'a>(

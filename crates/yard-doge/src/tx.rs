@@ -23,6 +23,13 @@ pub struct SealOutput {
     pub pubkey: [u8; 33],
 }
 
+/// Ordinary P2PKH payment that is not a YARD seal (treasury raise, sell refund).
+#[derive(Clone, Debug)]
+pub struct PayOutput {
+    pub value: u64,
+    pub pkh: [u8; 20],
+}
+
 /// Build a standard YARD L1 tx:
 ///   outputs[0] = OP_RETURN commitment (value 0)
 ///   outputs[1..k] = seal P2PKH, each >= 0.01 DOGE
@@ -33,11 +40,21 @@ pub fn build_yard_tx(
     change_pkh: Option<[u8; 20]>,
     commitment: &Commitment,
 ) -> Result<Transaction, Error> {
+    build_yard_tx_with_pays(inputs, seals, &[], change_pkh, commitment)
+}
+
+/// Same as `build_yard_tx`, plus extra P2PKH pays after the seals.
+/// Seal vouts stay 1..k so operation `this_tx(n)` indexing is unchanged.
+/// Empty seals are allowed (full burn): OP_RETURN + change.
+pub fn build_yard_tx_with_pays(
+    inputs: &[Spendable],
+    seals: &[SealOutput],
+    pays: &[PayOutput],
+    change_pkh: Option<[u8; 20]>,
+    commitment: &Commitment,
+) -> Result<Transaction, Error> {
     if inputs.is_empty() {
         return Err(Error::Tx("no inputs".into()));
-    }
-    if seals.is_empty() {
-        return Err(Error::Tx("need at least one seal output".into()));
     }
     for s in seals {
         if s.value < SOFT_DUST_KOINU {
@@ -46,27 +63,36 @@ pub fn build_yard_tx(
     }
     let in_sum: u64 = inputs.iter().map(|i| i.value).sum();
     let seal_sum: u64 = seals.iter().map(|s| s.value).sum();
-    if in_sum <= seal_sum {
-        return Err(Error::Tx("inputs cannot cover seal outputs".into()));
+    let pay_sum: u64 = pays.iter().map(|p| p.value).sum();
+    let committed = seal_sum.saturating_add(pay_sum);
+    if in_sum <= committed {
+        return Err(Error::Tx("inputs cannot cover seals + payments".into()));
     }
 
     let payload = commitment.encode();
     let mut change = true;
-    let mut tx = assemble(inputs, seals, change_pkh.filter(|_| change), &payload, 0)?;
+    let mut tx = assemble(
+        inputs,
+        seals,
+        pays,
+        change_pkh.filter(|_| change),
+        &payload,
+        0,
+    )?;
     // Iterate until the started-kilobyte fee bracket is stable.
     for _ in 0..8 {
         let size = tx.encode().len().max(estimate_legacy_size(
             inputs.len(),
-            seals.len() + usize::from(change),
+            seals.len() + pays.len() + usize::from(change),
             payload.len(),
         ));
         let fee = fee_for_size(size);
-        if in_sum < seal_sum + fee {
+        if in_sum < committed + fee {
             return Err(Error::Tx(format!(
-                "insufficient funds: in={in_sum} seals={seal_sum} fee={fee}"
+                "insufficient funds: in={in_sum} committed={committed} fee={fee}"
             )));
         }
-        let change_val = in_sum - seal_sum - fee;
+        let change_val = in_sum - committed - fee;
         change = change_val >= SOFT_DUST_KOINU && change_pkh.is_some();
         if change && is_soft_dust(change_val) {
             change = false;
@@ -75,13 +101,14 @@ pub fn build_yard_tx(
         tx = assemble(
             inputs,
             seals,
+            pays,
             if change { change_pkh } else { None },
             &payload,
             actual_change,
         )?;
         sign_p2pkh_inputs(&mut tx, inputs)?;
         let real_fee = fee_for_size(tx.encode().len());
-        let leftover = in_sum - seal_sum - if change { actual_change } else { 0 };
+        let leftover = in_sum - committed - if change { actual_change } else { 0 };
         if leftover >= real_fee {
             return Ok(tx);
         }
@@ -92,6 +119,7 @@ pub fn build_yard_tx(
 fn assemble(
     inputs: &[Spendable],
     seals: &[SealOutput],
+    pays: &[PayOutput],
     change_pkh: Option<[u8; 20]>,
     payload: &[u8],
     change_value: u64,
@@ -114,6 +142,12 @@ fn assemble(
         vout.push(TxOut {
             value: s.value,
             script_pubkey: p2pkh_script(&pkh),
+        });
+    }
+    for p in pays {
+        vout.push(TxOut {
+            value: p.value,
+            script_pubkey: p2pkh_script(&p.pkh),
         });
     }
     if let Some(pkh) = change_pkh {

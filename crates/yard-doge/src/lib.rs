@@ -9,6 +9,7 @@ mod tx;
 
 pub use address::{
     address_for_secret, decode_address, decode_wif, encode_wif, hash160, p2pkh_address,
+    p2pkh_address_from_pkh, pkh_from_p2pkh_address,
 };
 pub use error::Error;
 pub use fee::{
@@ -17,5 +18,6 @@ pub use fee::{
 pub use network::Network;
 pub use rpc::{RpcClient, Utxo};
 pub use tx::{
-    build_yard_tx, dummy_snapshot_tx, signature_hash, SealOutput, Spendable, SIGHASH_ALL,
+    build_yard_tx, build_yard_tx_with_pays, dummy_snapshot_tx, signature_hash, PayOutput,
+    SealOutput, Spendable, SIGHASH_ALL,
 };
