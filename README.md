@@ -121,9 +121,8 @@ Product path (see [GAMEPLAN.md](GAMEPLAN.md)):
 
 - [x] Gameplan + vs-Doginals docs
 - [x] dogecoin.dog `/yard` + `/yard/burn` lab surface (`dogenals/web-com`)
-- [x] Dojak commitment encode/decode stub (`dojak/docs/YARD.md`)
-- [ ] Dojak: protect seal UTXOs · verify `.yard` · tip/burn
-- [ ] One public WOW drop + live burn wall
+- [x] Dojak: protect seal UTXOs · verify `.yard` · tip/burn (`YardLabPanel`)
+- [ ] One public WOW drop + live burn wall (mainnet consignments)
 - [ ] Reorg test harness on regtest
 - [ ] Independent review of encode + sig + seal binding
 

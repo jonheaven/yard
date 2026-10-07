@@ -57,9 +57,9 @@ YARD stamp burn.
 ## Sequence
 
 1. **Harden protocol** — reorg harness, independent review of encode/sig/seal, freeze v0.1 consignment shape.
-2. **dogecoin.dog `/yard` + `/yard/burn`** — memorable lab UI (this milestone).
-3. **Dojak YARD lab** — coin lock + verify + tip; creation can stay `yard-cli` for drop #1.
-4. **One public drop** — issue WOW, tip friends, run the wall a week. Measure tip/burn/share.
+2. ~~**dogecoin.dog `/yard` + `/yard/burn`**~~ — shipped (lab UI).
+3. ~~**Dojak YARD lab**~~ — protect + verify + tip/burn (full-note) shipped in `@dojak/web` `YardLabPanel`.
+4. **One public drop** — issue WOW via `yard-cli`, tip friends, run the wall a week. Measure tip/burn/share.
 5. **Then** Phase 1 launch-buy as creator tool on the same site.
 
 Parked: Phase 2 channels, Phase 3 batches, YARD token, bridges, EVM.
