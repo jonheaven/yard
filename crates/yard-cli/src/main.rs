@@ -90,6 +90,9 @@ enum Cmd {
         /// CPMM: initial virtual DOGE reserve in koinu.
         #[arg(long)]
         cpmm_x: Option<String>,
+        /// Walletless RPC: spend these confirmed P2PKH outpoints (`txid:vout`, repeatable).
+        #[arg(long)]
+        utxo: Vec<String>,
     },
     /// Transfer units from a consignment to a recipient pubkey/address.
     Transfer {
@@ -198,6 +201,9 @@ enum Cmd {
         out: PathBuf,
         #[arg(long, default_value = "0.05")]
         seal_doge: String,
+        /// Extra confirmed outpoints to fund seals + treasury (`txid:vout`).
+        #[arg(long)]
+        utxo: Vec<String>,
     },
     /// Sell units back into the pool. Refund is L1 DOGE to the seller.
     LaunchSell {
@@ -257,6 +263,7 @@ fn run(cli: Cli) -> Result<()> {
             base,
             slope,
             cpmm_x,
+            utxo,
         } => cmd_genesis(
             parse_network(&network)?,
             rpc.as_deref(),
@@ -272,6 +279,7 @@ fn run(cli: Cli) -> Result<()> {
             base.as_deref(),
             slope.as_deref(),
             cpmm_x.as_deref(),
+            &utxo,
             &persist_dir,
             no_backup,
         ),
@@ -365,6 +373,7 @@ fn run(cli: Cli) -> Result<()> {
             network,
             out,
             seal_doge,
+            utxo,
         } => cmd_launch_buy(
             parse_network(&network)?,
             rpc.as_deref(),
@@ -376,6 +385,7 @@ fn run(cli: Cli) -> Result<()> {
             pool_wif.as_deref(),
             &out,
             &seal_doge,
+            &utxo,
             &persist_dir,
             no_backup,
         ),
@@ -436,6 +446,7 @@ fn cmd_genesis(
     base: Option<&str>,
     slope: Option<&str>,
     cpmm_x: Option<&str>,
+    utxo: &[String],
     backup_dir: &PathBuf,
     no_backup: bool,
 ) -> Result<()> {
@@ -475,10 +486,15 @@ fn cmd_genesis(
         meta.validate().map_err(|e| anyhow::anyhow!(e))?;
     }
 
-    let utxos = rpc.listunspent(1, &[addr.clone()])?;
-    if utxos.is_empty() {
-        bail!("no confirmed UTXOs for {addr}. Mine to this address on regtest.");
-    }
+    let spends = if utxo.is_empty() {
+        let utxos = rpc.listunspent(1, &[addr.clone()])?;
+        if utxos.is_empty() {
+            bail!("no confirmed UTXOs for {addr}. Pass --utxo txid:vout for walletless RPC.");
+        }
+        select_inputs(&utxos, &sk, seal_val)?
+    } else {
+        spends_from_utxo_args(&rpc, &sk, utxo)?
+    };
     let mut op = Operation {
         op_version: 1,
         contract_id: ContractId::zeros(),
@@ -494,7 +510,6 @@ fn cmd_genesis(
     };
     op.sign(0, &sk)?;
     let cm = Commitment::single(&op)?;
-    let spends = select_inputs(&utxos, &sk, seal_val)?;
     let change_pkh = Some(hash160(&pk));
     let tx = build_yard_tx(
         &spends,
@@ -511,6 +526,7 @@ fn cmd_genesis(
     let cons = Consignment::new(vec![op], vec![tx]);
     persist(out, &cons, backup_dir, no_backup)?;
     println!("broadcast: {txid}");
+    print_spendable(&cons.txs.last().unwrap());
     println!("contract: {}", cid.display_with_tick(tick));
     println!("contract_id: {cid}");
     if meta.launch.is_some() {
@@ -784,6 +800,7 @@ fn cmd_launch_buy(
     pool_wif: Option<&str>,
     out: &PathBuf,
     seal_doge: &str,
+    utxo: &[String],
     backup_dir: &PathBuf,
     no_backup: bool,
 ) -> Result<()> {
@@ -880,9 +897,22 @@ fn cmd_launch_buy(
     let cm = Commitment::single(&buy)?;
 
     let mut spends = vec![seal_spend(&rpc, &pool_seal, &pool_sk)?];
-    let extra = rpc.listunspent(1, &[funder_addr])?;
     let need: u64 = seals.iter().map(|s| s.value).sum::<u64>() + pay + 2_000_000;
-    add_funding(&mut spends, &extra, &funder_sk, need, &[pool_seal])?;
+    if utxo.is_empty() {
+        let extra = rpc.listunspent(1, &[funder_addr])?;
+        add_funding(&mut spends, &extra, &funder_sk, need, &[pool_seal])?;
+    } else {
+        for s in spends_from_utxo_args(&rpc, &funder_sk, utxo)? {
+            if s.prevout == pool_seal {
+                continue;
+            }
+            spends.push(s);
+        }
+        let have: u64 = spends.iter().map(|s| s.value).sum();
+        if have < need {
+            bail!("--utxo inputs total {have} koinu, need about {need}");
+        }
+    }
     let pays = [PayOutput {
         value: pay,
         pkh: treasury,
@@ -1178,6 +1208,56 @@ fn add_funding(
         }
     }
     bail!("insufficient confirmed UTXOs (need about {need} koinu)")
+}
+
+fn parse_txid_vout(s: &str) -> Result<(String, u32)> {
+    let (txid, v) = s
+        .rsplit_once(':')
+        .context("--utxo must be txid:vout (RPC txid byte order)")?;
+    let vout: u32 = v.parse().context("utxo vout")?;
+    let raw = hex::decode(txid.trim()).context("utxo txid hex")?;
+    if raw.len() != 32 {
+        bail!("utxo txid must be 32 bytes");
+    }
+    Ok((txid.trim().to_string(), vout))
+}
+
+fn spends_from_utxo_args(
+    rpc: &RpcClient,
+    sk: &SecretKey,
+    specs: &[String],
+) -> Result<Vec<Spendable>> {
+    let mut out = Vec::new();
+    for s in specs {
+        let (txid, vout) = parse_txid_vout(s)?;
+        let tx = rpc.fetch_tx(&txid)?;
+        let o = tx
+            .output(vout)
+            .with_context(|| format!("missing output {txid}:{vout}"))?;
+        out.push(Spendable {
+            prevout: Outpoint {
+                txid: yard_core::rpc_txid_to_internal(&txid)?,
+                vout,
+            },
+            value: o.value,
+            script_pubkey: o.script_pubkey.clone(),
+            secret: *sk,
+        });
+    }
+    if out.is_empty() {
+        bail!("no --utxo outpoints");
+    }
+    Ok(out)
+}
+
+fn print_spendable(tx: &yard_core::Transaction) {
+    let rpc_txid = tx.txid_rpc_hex();
+    for (i, o) in tx.vout.iter().enumerate() {
+        if o.value == 0 {
+            continue;
+        }
+        println!("spendable {rpc_txid}:{i} value_koinu {}", o.value);
+    }
 }
 
 fn seal_spend(rpc: &RpcClient, seal: &Outpoint, sk: &SecretKey) -> Result<Spendable> {
