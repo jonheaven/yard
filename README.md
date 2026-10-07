@@ -5,6 +5,12 @@ Client-side validated notes on unmodified Dogecoin.
 L1 stays a payment chain. YARD is optional software. If you delete
 it, your DOGE is still DOGE.
 
+**Not a Doginal.** On-chain you only get a fingerprint; the note lives in a
+`.yard` file sealed to a UTXO. See [docs/VS_DOGINALS.md](docs/VS_DOGINALS.md).
+
+**Launch plan:** [GAMEPLAN.md](GAMEPLAN.md) — Burn a Wow on
+[dogecoin.dog/yard](https://dogecoin.dog/yard) (Dojak web wallet).
+
 See YARD.md for the spec. Review belongs in GitHub issues, not DMs.
 
 ## Phase 0
@@ -111,10 +117,18 @@ Built:
 - [x] Ticker-collision UX: CLI prints `TICK-a1b2c3d4`, never ticker-only
 - [x] Consignment backup/export so lost-file is survivable
 
-Still open:
+Product path (see [GAMEPLAN.md](GAMEPLAN.md)):
 
-- [ ] Optional larger OP_RETURN envelope behind raised `-datacarriersize`
+- [x] Gameplan + vs-Doginals docs
+- [x] dogecoin.dog `/yard` + `/yard/burn` lab surface (`dogenals/web-com`)
+- [x] Dojak commitment encode/decode stub (`dojak/docs/YARD.md`)
+- [ ] Dojak: protect seal UTXOs · verify `.yard` · tip/burn
+- [ ] One public WOW drop + live burn wall
 - [ ] Reorg test harness on regtest
 - [ ] Independent review of encode + sig + seal binding
+
+Still open / parked:
+
+- [ ] Optional larger OP_RETURN envelope behind raised `-datacarriersize`
 - [ ] Phase 2 channels (needs CSV)
 - [ ] Phase 3 batch execution — parked. Do not start.
