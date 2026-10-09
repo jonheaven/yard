@@ -32,7 +32,7 @@ Full table: [docs/VS_DOGINALS.md](docs/VS_DOGINALS.md).
 
 | Layer | Where | Job |
 |---|---|---|
-| Protocol + CLI | [jonheaven/yard](https://github.com/jonheaven/yard) (`Desktop/yard`, junction `dogestack/yard`) | Spec, consignments, genesis/transfer/burn/launch |
+| Protocol + CLI | [jonheaven/yard](https://github.com/jonheaven/yard) — checkout at `dogestack/yard` on this PC | Spec, consignments, genesis/transfer/burn/launch |
 | Wallet (lab) | `dogestack/dojak` | Protect stamped UTXOs, verify `.yard`, tip one stamp |
 | **Shibe frontend** | **`dogestack/dogenals/web-com` → [dogecoin.dog](https://dogecoin.dog)** | All public UX; embeds `@dojak/web` |
 | Indexer (optional) | `dogestack/dogex` | Catalog fingerprints later — never source of truth |
