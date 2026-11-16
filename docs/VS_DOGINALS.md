@@ -33,7 +33,7 @@ arrives. Nothing wraps or locks coins on another chain.
 | Fungible or limited **labels** that must not trap DOGE, meme stamps, client-checked sales | YARD |
 | Instant app-chain execution via a bridge | Neither (out of scope for YARD) |
 
-## UX rules for wallets (Dojak / dogecoin.dog)
+## UX rules for wallets (Dig / dogecoin.dog)
 
 - Never show ticker alone — always `ContractId` form (`WOW-a1b2c3d4`).
 - Mark sealed UTXOs **do-not-spend** in ordinary sends.

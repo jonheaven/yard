@@ -33,12 +33,12 @@ Full table: [docs/VS_DOGINALS.md](docs/VS_DOGINALS.md).
 | Layer | Where | Job |
 |---|---|---|
 | Protocol + CLI | [jonheaven/yard](https://github.com/jonheaven/yard) — checkout at `dogestack/yard` on this PC | Spec, consignments, genesis/transfer/burn/launch |
-| Wallet (lab) | `dogestack/dojak` | Protect stamped UTXOs, verify `.yard`, tip one stamp |
-| **Shibe frontend** | **`dogestack/dogenals/web-com` → [dogecoin.dog](https://dogecoin.dog)** | All public UX; embeds `@dojak/web` |
+| Wallet (lab) | `dogestack/dig` | Protect stamped UTXOs, verify `.yard`, tip one stamp |
+| **Shibe frontend** | **`dogestack/dogenals/web-com` → [dogecoin.dog](https://dogecoin.dog)** | All public UX; embeds `@dig/web` |
 | Indexer (optional) | `dogestack/dogex` | Catalog fingerprints later — never source of truth |
 | Not this | `wow-signal` / Ð:WOW | Doginal guestbook postage — different product |
 
-**Rule:** anything Shibe-facing ships on **dogecoin.dog** (`web-com`), with Dojak
+**Rule:** anything Shibe-facing ships on **dogecoin.dog** (`web-com`), with Dig
 web as the wallet. Do not invent a parallel storefront.
 
 Routes (Labs):
@@ -58,7 +58,7 @@ YARD stamp burn.
 
 1. **Harden protocol** — reorg harness, independent review of encode/sig/seal, freeze v0.1 consignment shape.
 2. ~~**dogecoin.dog `/yard` + `/yard/burn`**~~ — shipped (lab UI).
-3. ~~**Dojak YARD lab**~~ — protect + verify + tip/burn (full-note) shipped in `@dojak/web` `YardLabPanel`.
+3. ~~**Dig YARD lab**~~ — protect + verify + tip/burn (full-note) shipped in `@dig/web` `YardLabPanel`.
 4. **One public drop** — issue WOW via `yard-cli`, tip friends, run the wall a week. Measure tip/burn/share.
 5. **Then** Phase 1 launch-buy as creator tool on the same site.
 
